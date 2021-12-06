@@ -1,0 +1,165 @@
+```{r}
+df <- read.csv("./framingham.csv", header = T)
+df <- na.omit(df)
+head(df)
+```
+
+```{r}
+nrow(df)
+```
+```{r}
+table(df$TenYearCHD)
+```
+```{r}
+par(mfrow=c(1, 1))
+boxplot(age ~ TenYearCHD, data=df)
+boxplot(cigsPerDay ~ TenYearCHD, data=df)
+boxplot(totChol ~ TenYearCHD, data=df)
+boxplot(sysBP ~ TenYearCHD, data=df)
+boxplot(glucose ~ TenYearCHD, data=df)
+```
+```{r}
+df$y <- ifelse(df$TenYearCHD == 0, 0, 1)
+```
+
+```{r}
+tol = 10^-5
+
+Y <- df$y
+X <- model.matrix(Y ~ male + age + cigsPerDay + totChol +sysBP + glucose, data=df)
+X[1:2, ]
+```
+
+```{r}
+p <- ncol(X) 
+beta <- rep(0, p) 
+
+for(i in 1:10){
+  eta <- (X %*% beta)[,1]
+  mu <- exp(eta)/(1+exp(eta))
+  v <- mu *(1-mu)
+  Z <- eta + (Y-mu)/v
+  VX = X * v
+  beta_new <- solve(t(X) %*% VX, t(VX) %*% Z )
+  
+  diff <- sum((beta - beta_new)**2)
+  cat("Iter[",i,"]\n")
+  cat("beta_new:", beta_new, "\n")
+  cat("diff:", diff, "\n")
+  beta = beta_new
+  
+  if(diff < tol){ 
+    break()
+  }
+}
+```
+
+```{r}
+beta
+```
+
+```{r}
+I = t(X) %*% VX
+Var_ML<-solve(I)
+sqrt(diag(Var_ML))
+```
+
+
+
+```{r}
+for(i in 2:6) {
+  print(beta[i] - 1.96 * sqrt(Var_ML[i,i]))
+  print(beta[i] + 1.96 * sqrt(Var_ML[i,i]))
+  print('===========')
+}
+```
+
+```{r}
+# Wald p-value
+for(i in 2:6) {
+  b_wald = (beta[i]**2)/Var_ML[i,i]
+  b_pvalue = pchisq(b_wald, df=1, lower.tail=FALSE)
+  print(b_wald)
+  print(b_pvalue)
+}
+```
+
+```{r}
+Deviance_Logistic <- function(Y, mu){ 
+  idx1<-which(Y==1) 
+  idx0<-which(Y==0)
+  
+  Devi<-rep(0, length(Y))
+  Devi[idx0]<- 2*(-log(1-mu[idx0]))
+  Devi[idx1]<- 2*(-log(mu[idx1]))
+  D_all<-sum(Devi)
+  return(list(D=D_all, Devi=Devi))
+}
+
+out.glm0<-glm(y ~ 1, data=df, family=binomial(link="logit"))
+out.glm1<-glm(y ~ male + age + cigsPerDay + totChol +sysBP + glucose, data=df, family=binomial(link="logit"))
+```
+
+```{r}
+mu0<-out.glm0$fitted.value
+mu1<-out.glm1$fitted.value
+
+D1<-Deviance_Logistic(Y, mu1)
+D0<-Deviance_Logistic(Y, mu0)
+```
+
+```{r}
+print(D1$D)
+print(D0$D)
+```
+
+```{r}
+rd<-sqrt(abs(D1$Devi)) * sign(Y-mu1)
+par(mfrow=c(1,2))
+plot(out.glm1$linear.predictors, rd)
+plot(mu1, rd)
+```
+
+```{r}
+par(mfrow=c(1,1))
+```
+
+```{r}
+X<-model.matrix(out.glm1)
+V<-diag(mu1*(1-mu1))
+XVX<-t(X) %*% V %*% X
+XV_sqrt = t(X) %*% sqrt(V)
+H = t(XV_sqrt) %*% solve(XVX) %*% XV_sqrt
+h= diag(H)
+plot(h)
+```
+
+```{r}
+
+# male + age + cigsPerDay + totChol +sysBP + glucose
+
+out.glm_H0<-glm(y ~ cigsPerDay, data=df, family=binomial(link="logit"))
+T = deviance(out.glm_H0) - deviance(out.glm1)
+pchisq(T, df=2, lower.tail =  FALSE)
+```
+
+```{r}
+anova(out.glm1, out.glm_H0, test="LRT")
+```
+
+
+```{r}
+l1 <- logLik(out.glm1)[1]
+l0 <- logLik(out.glm0)[1]
+N <- nrow(df$y)
+
+L1 <- exp(l1)
+L0 <- exp(l0)
+R2_CS <- 1 - (L0/L1)**{2/N} # cox & snell Rˆ2
+
+MaxR2 = 1-(L0)**{2/N}
+R2_MaxAdj = R2_CS/MaxR2 # NAGELKERK
+
+R2_CS
+R2_MaxAdj
+```
