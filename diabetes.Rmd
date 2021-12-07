@@ -1,0 +1,24 @@
+```{r}
+
+dat <- read.csv("diabetes_binary_5050split_health_indicators_BRFSS2015.csv", header = T)
+temp <- na.omit(dat)
+
+full <- glm(TenYearCHD ~ ., data = temp, family = "binomial")
+
+# VIF diagnosis
+car::vif(full)
+reduced <- glm(TenYearCHD ~ . - cigsPerDay, data = temp, family = "binomial")
+car::vif(reduced)
+reduced <- glm(TenYearCHD ~ . - glucose, data = temp, family = "binomial")
+car::vif(reduced)
+reduced <- glm(TenYearCHD ~ . - sysBP - prevalentHyp, data = temp, family = "binomial")
+car::vif(reduced)
+
+
+# glucose, cigsPerDay, sysBP explain variations of others
+reduced <- glm(TenYearCHD ~ . - glucose - cigsPerDay - sysBP, data = temp, family = "binomial")
+
+# variable selection
+step <- step(fit, direction="both")
+```
+

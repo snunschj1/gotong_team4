@@ -1,0 +1,353 @@
+```{r}
+install.packages("cat")
+install.packages("glmnet")
+install.packages("ModelMetrics")
+```
+
+
+```{r}
+library(cat)
+library(glmnet)
+library(ModelMetrics)
+```
+
+
+```{r}
+# 결측값 제거
+dat <- read.csv("hospital_mortality.csv", header = T)
+ind <- which(colSums(is.na(dat))> 100)
+temp <- na.omit(dat[,-ind])
+```
+
+```{r}
+# Dataset이 이미 Train/Test 나눠져있는 것 같습니다.
+nrow(temp[temp$group==1,]) # derivation 
+nrow(temp[temp$group==2,]) # validation
+```
+
+```{r}
+train_df <- temp[temp$group==1,]
+test_df <- temp[temp$group==2,]
+train <- train_df[,-(1:2)] # Group , ID 변수는 필요 없음
+test <- test_df[,-(1:2)]   # Group , ID 변수는 필요 없음
+```
+
+```{r}
+head(train)
+```
+
+```{r}
+train_X <- as.matrix(train[,-1])
+train_Y <- train$outcome
+test_X <- as.matrix(test[,-1])
+test_Y <- test$outcome
+```
+
+```{r}
+covariate_names <- colnames(train)
+covariate_names
+```
+
+```{r}
+# 각 변수의 Histogram
+for (i in 2:length(covariate_names)) {
+  variable <- train[,i]
+  hist(variable, main=covariate_names[i])
+}
+```
+
+```{r}
+# simple LM
+full <- glm(outcome ~., data = train, family = "binomial")
+summary(full)
+```
+
+```{r}
+# Simple LM의 AUC
+auc1 <- auc(test_Y, predict(full, test))
+```
+
+
+```{r}
+# null model (outcome ~ 1 : intercept-only model)
+# full model (outcome ~ .)
+# 두 모델의 deviance 확인
+null.deviance <- full$null.deviance
+full.deviance <- deviance(full)
+null.deviance
+full.deviance
+```
+
+```{r}
+## VIF diagnosis ##
+car::vif(full)
+```
+
+```{r}
+# full model에서 vif diagnostic 결과를 보고 correlation이 너무 큰 변수 제거한 model
+nested.vif <- glm(outcome ~ age + gendera + hypertensive + atrialfibrillation + CHD.with.no.MI + diabetes + deficiencyanemias + depression + Hyperlipemia + Renal.failure + COPD + heart.rate + Systolic.blood.pressure + Diastolic.blood.pressure + Respiratory.rate + temperature + SP.O2 + Urine.output + RDW + Leucocyte + Platelets + NT.proBNP + Creatinine + Urea.nitrogen + glucose + Blood.potassium + Blood.calcium + Magnesium.ion + EF, data = train, family = "binomial")
+summary(nested.vif)
+```
+```{r}
+auc2 <- auc(test_Y, predict(nested.vif, test))
+```
+
+
+```{r}
+# full model에서 vif diagnostic 결과를 보고 correlation이 너무 큰 변수 제거한 model의 deviance
+nested.vif.deviance <- deviance(nested.vif)
+nested.vif.deviance
+```
+
+
+```{r}
+# full model하고 nested.vif model 비교 
+T = nested.vif.deviance - full.deviance
+pchisq(T, df=length(coefficients(full))- length(coefficients(nested.vif)), lower.tail=FALSE)
+```
+pvalue <= 0.05 이므로 H0(nested.vif model) reject
+
+```{r}
+## variable selection ##
+step <- step(full, direction="both")
+```
+
+```{r}
+# Variable Selection 결과로 나온 모델
+step.model <- glm(outcome ~ gendera + hypertensive + atrialfibrillation + diabetes + deficiencyanemias + Hyperlipemia + Renal.failure + COPD + heart.rate + Systolic.blood.pressure + Diastolic.blood.pressure + SP.O2 + Urine.output + MCH + MCV + Leucocyte + Platelets + Creatinine + Urea.nitrogen + Blood.calcium + Anion.gap, data=train, family='binomial')
+summary(step.model)
+```
+```{r}
+auc3 <- auc(test_Y, predict(step.model, test))
+```
+
+```{r}
+# Variable Selection 후 VIF diagnostic 한 번 더 진행
+car::vif(step.model)
+```
+
+```{r}
+# Variable Selection 후 VIF diagnostic 한 번 더 진행
+nested.step.model <- glm(outcome ~ gendera + hypertensive + atrialfibrillation + diabetes + deficiencyanemias + Hyperlipemia + Renal.failure + COPD + heart.rate + Systolic.blood.pressure + Diastolic.blood.pressure + SP.O2 + Urine.output + Leucocyte + Platelets + Creatinine + Urea.nitrogen + Blood.calcium + Anion.gap, data=train, family='binomial')
+summary(nested.step.model)
+```
+```{r}
+auc4 <- auc(test_Y, predict(nested.step.model, test))
+```
+
+
+```{r}
+# step model과 nested.step model deviance 
+step.deviance <- deviance(step.model)
+nested.step.deviance <- deviance(nested.step.model)
+```
+
+
+```{r}
+# step model과 nested.step model 비교
+T = nested.step.deviance - step.deviance
+pchisq(T, df=length(coefficients(step.model))- length(coefficients(nested.step.model)), lower.tail=FALSE)
+```
+pvalue < 0.05 라서 reject H0(nested.step)  
+
+```{r}
+# ridge 
+cv_out <- cv.glmnet(train_X, train_Y, alpha = 0, nfolds = 10, family = "binomial")
+lamb_ridge <- cv_out$lambda.min
+fit_ridge <- glmnet(train_X, train_Y, alpha = 0, lambda = lamb_ridge, family = "binomial")
+y_pred <- predict(fit_ridge, test_X)
+auc5 <- auc(test_Y, y_pred)
+
+
+# LASSO
+cv_out <- cv.glmnet(train_X, train_Y, alpha = 1, nfolds = 10, family = "binomial")
+lamb_lasso <- cv_out$lambda.min
+fit_lasso <- glmnet(train_X, train_Y, alpha = 1, lambda = lamb_lasso, family = "binomial")
+y_pred <- predict(fit_lasso, test_X)
+auc6 <- auc(test_Y, y_pred)
+
+# elastic net
+cv_out <- cv.glmnet(train_X, train_Y, alpha = 0.5, nfolds = 10, family = "binomial")
+lamb_elastic <- cv_out$lambda.min
+fit_elastic <- glmnet(train_X, train_Y, alpha = 0.5, lambda = lamb_elastic, family = "binomial")
+y_pred <- predict(fit_elastic, test_X)
+auc7 <- auc(test_Y, y_pred)
+```
+
+```{r}
+##  by step_AIC and LASSO
+beta_ridge <- fit_ridge$beta
+beta_lasso <- fit_lasso$beta
+```
+
+```{r}
+beta_ridge
+```
+
+
+```{r}
+# selected variables by LASSO
+names(beta[which(abs(beta[,1]) > 0.0000000000001),])
+```
+
+```{r}
+# selected variables by stepwise(AIC)
+names(step.model$coefficients)
+```
+
+
+```{r}
+# results
+models <- c("Full", "Full VIF", "step", "step VIF","ridge", "LASSO", "elastic_net")
+auc_vec <- c(auc1, auc2, auc3, auc4, auc5, auc6, auc7)
+auc_table <- data.frame(model = models, auc = auc_vec)
+auc_table
+```
+
+```{r}
+# 이 블록은 Ridge Lasso Elastic-net 계산을 못하겠어요.
+
+
+out.glm0<-glm(outcome ~ 1, data=train, family=binomial(link="logit")) # intercept only model
+
+l1 <- logLik(step.model)[1] # 이 부분만 "full" "nested.vif" "step.model" "nested.step.model" 바꾸면 됨
+l0 <- logLik(out.glm0)[1]
+
+N <- nrow(train)
+
+L1 <- exp(l1)
+L0 <- exp(l0)
+R2_CS <- 1 - (L0/L1)**(2/N) # cox & snell Rˆ2
+MaxR2 = 1-(L0)**(2/N)
+R2_MaxAdj = R2_CS/MaxR2 # NAGELKERK
+
+R2_CS
+R2_MaxAdj
+```
+
+
+
+```{r}
+# IRWLS 해볼 수는 있는데... lasso나 elastic은 식을 모르겠어요
+# Ridge는 되긴 하는 것 같은데, glmnet 했을 때랑 결과가 좀 다르네요 ㅎㅎ
+
+# tolerance
+tol=10**(-5)
+
+# design matrix
+Y <- train$outcome
+X <- model.matrix(outcome ~ ., data=train)
+
+# IRWLS
+p <- ncol(X) 
+beta <- rep(0, p) 
+
+for(i in 1:10){
+  eta <- (X %*% beta)[,1]
+  mu <- exp(eta)/(1+exp(eta))
+  v <- mu *(1-mu)
+  Z <- eta + (Y-mu)/v
+  VX = X * v
+  #beta_new <- solve(t(X) %*% VX + lamb_ridge * diag(41), t(VX) %*% Z )
+  beta_new <- solve(t(X) %*% VX, t(VX) %*% Z )
+  
+  diff <- sum((beta - beta_new)**2)
+  cat("Iter[",i,"]\n")
+  cat("beta_new:", beta_new, "\n")
+  cat("diff:", diff, "\n")
+  beta = beta_new
+  
+  if(diff < tol){ 
+    break()
+  }
+}
+```
+
+
+```{r}
+beta
+```
+
+```{r}
+I = t(X) %*% VX
+Var_ML<-solve(I)
+sqrt(diag(Var_ML))
+```
+
+
+
+```{r}
+for(i in 2:41) {
+  print(beta[i] - 1.96 * sqrt(Var_ML[i,i]))
+  print(beta[i] + 1.96 * sqrt(Var_ML[i,i]))
+  print('===========')
+}
+```
+
+```{r}
+# Wald p-value
+for(i in 2:6) {
+  b_wald = (beta[i]**2)/Var_ML[i,i]
+  b_pvalue = pchisq(b_wald, df=1, lower.tail=FALSE)
+  print(b_wald)
+  print(b_pvalue)
+}
+```
+
+```{r}
+
+# nan이 생겨서 안 되네요.. ㅠ
+Deviance_Logistic <- function(Y, mu){ 
+  idx1 <- which(Y==1) 
+  idx0 <- which(Y==0)
+  
+  Devi <- rep(0, length(Y))
+  
+  Devi[idx0]<- 2*(-log(1-mu[idx0]))
+  Devi[idx1]<- 2*(-log(mu[idx1]))
+  
+  D_all<-sum(Devi)
+  
+  return(list(D=D_all, Devi=Devi))
+}
+
+out.glm0<-glm(outcome ~ 1, data=train, family=binomial(link="logit"))
+out.glm1<-glm(outcome ~ ., data=train, family=binomial(link="logit"))
+
+mu0<-out.glm0$fitted.value
+mu1<-out.glm1$fitted.value
+
+D1<-Deviance_Logistic(Y, mu1)
+D0<-Deviance_Logistic(Y, mu0)
+```
+
+
+```{r}
+print(D1$D)
+print(D0$D)
+```
+
+```{r}
+# 그냥 빼도 될 것 같아요.. ridge 나 lasso 에 대해서도 비슷하게 할 수 있음 해보려 했는데
+# 못하겠어요 ㅎㅎㅋㅋㅋ
+
+rd<-sqrt(abs(D1$Devi)) * sign(Y-mu1)
+par(mfrow=c(1,2))
+plot(out.glm1$linear.predictors, rd)
+plot(mu1, rd)
+```
+
+```{r}
+par(mfrow=c(1,1))
+```
+
+```{r}
+X<-model.matrix(out.glm1)
+V<-diag(mu1*(1-mu1))
+XVX<-t(X) %*% V %*% X
+XV_sqrt = t(X) %*% sqrt(V)
+H = t(XV_sqrt) %*% solve(XVX) %*% XV_sqrt
+h= diag(H)
+plot(h)
+```
+
